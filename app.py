@@ -1,351 +1,307 @@
 """
-校园食堂数据分析系统 - Flask Web应用
-主程序入口
+Flask后端：校园食堂数据看板接口
+支持三个筛选参数：start, end, stall_id（都是可选）
 """
-
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 import pandas as pd
-import json
-from pathlib import Path
+from datetime import datetime, timedelta
 import os
 
-app = Flask(__name__, template_folder='templates', static_folder='static')
-app.config['JSON_AS_ASCII'] = False
+app = Flask(__name__)
+CORS(app)
 
-# ============================================================================
-# 数据加载
-# ============================================================================
+# ==================== 工具函数 ====================
+def ok(data):
+    """成功响应"""
+    return jsonify({"success": True, "data": data, "message": ""})
+
+def err(msg):
+    """错误响应"""
+    return jsonify({"success": False, "data": None, "message": msg}), 400
 
 def load_data():
-    """加载所有数据"""
+    """加载所有CSV文件"""
     try:
-        data = {
-            'stalls': pd.read_csv('data/csv/stalls.csv', encoding='utf-8-sig'),
-            'dishes': pd.read_csv('data/csv/dishes.csv', encoding='utf-8-sig'),
-            'orders': pd.read_csv('data/csv/orders.csv', encoding='utf-8-sig'),
-            'order_items': pd.read_csv('data/csv/order_items.csv', encoding='utf-8-sig'),
-            'waste': pd.read_csv('data/csv/waste_records.csv', encoding='utf-8-sig'),
-        }
-        return data
+        orders = pd.read_csv('data/orders.csv')
+        dishes = pd.read_csv('data/dishes.csv')
+        order_items = pd.read_csv('data/order_items.csv')
+        waste_records = pd.read_csv('data/waste_records.csv')
+        
+        # 转换时间列为datetime
+        orders['ordered_at'] = pd.to_datetime(orders['ordered_at'])
+        waste_records['recorded_date'] = pd.to_datetime(waste_records['recorded_date'])
+        
+        return orders, dishes, order_items, waste_records
     except Exception as e:
-        print(f"数据加载失败: {e}")
-        return None
+        print(f"数据加载错误: {e}")
+        return None, None, None, None
 
-# 全局数据加载
-DATA = load_data()
+def apply_filters(order_items, orders, dishes, start=None, end=None, stall_id=None):
+    """
+    应用筛选条件
+    - start/end: 日期范围 (YYYY-MM-DD格式)
+    - stall_id: 档口ID
+    """
+    # 先合并订单信息
+    merged = order_items.merge(orders, left_on='order_id', right_on='id', how='left')
+    merged = merged.merge(dishes, left_on='dish_id', right_on='id', how='left', suffixes=('_order', '_dish'))
+    
+    # 按日期筛选
+    if start:
+        try:
+            start_date = pd.to_datetime(start).date()
+            merged = merged[merged['ordered_at'].dt.date >= start_date]
+        except:
+            pass
+    
+    if end:
+        try:
+            end_date = pd.to_datetime(end).date()
+            merged = merged[merged['ordered_at'].dt.date <= end_date]
+        except:
+            pass
+    
+    # 按档口筛选
+    if stall_id:
+        try:
+            stall_id = int(stall_id)
+            merged = merged[merged['stall_id'] == stall_id]
+        except:
+            pass
+    
+    return merged
 
-# ============================================================================
-# Q1: 三个餐段的订单数
-# ============================================================================
+# ==================== API 接口 ====================
 
-@app.route('/api/q1', methods=['GET'])
-def get_q1():
-    """Q1: 三个餐段的订单数"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+@app.get("/api/summary")
+def summary():
+    """
+    获取汇总指标：营业额、订单数、客单价
     
-    orders = DATA['orders']
-    q1_result = orders.groupby('meal_period').size().sort_values(ascending=False)
+    参数：
+    - start: 开始日期 (YYYY-MM-DD)
+    - end: 结束日期 (YYYY-MM-DD)
+    - stall_id: 档口ID
+    """
+    start = request.args.get('start')
+    end = request.args.get('end')
+    stall_id = request.args.get('stall_id')
     
-    return jsonify({
-        'title': 'Q1: 三个餐段的订单数',
-        'data': {
-            '早餐': int(q1_result.get('早餐', 0)),
-            '午餐': int(q1_result.get('午餐', 0)),
-            '晚餐': int(q1_result.get('晚餐', 0)),
-        },
-        'total': int(q1_result.sum()),
-        'busiest': q1_result.idxmax(),
-        'busiest_count': int(q1_result.max()),
-        'busiest_percentage': round(q1_result.max() / q1_result.sum() * 100, 1),
-        'conclusion': f"{q1_result.idxmax()}是最忙的餐段，共有{q1_result.max()}个订单，占比{round(q1_result.max() / q1_result.sum() * 100, 1)}%。"
-    })
-
-# ============================================================================
-# Q2: 5种浪费原因的次数
-# ============================================================================
-
-@app.route('/api/q2', methods=['GET'])
-def get_q2():
-    """Q2: 5种浪费原因的次数"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+    orders, dishes, order_items, waste_records = load_data()
     
-    waste = DATA['waste']
-    q2_result = waste['reason'].value_counts()
+    if orders is None:
+        return err("数据加载失败")
     
-    return jsonify({
-        'title': 'Q2: 5种浪费原因的次数',
-        'data': q2_result.to_dict(),
-        'total': int(q2_result.sum()),
-        'most_common': q2_result.idxmax(),
-        'most_common_count': int(q2_result.max()),
-        'most_common_percentage': round(q2_result.max() / q2_result.sum() * 100, 1),
-        'conclusion': f"{q2_result.idxmax()}是最常见的浪费原因，共发生{q2_result.max()}次，占浪费原因总数的{round(q2_result.max() / q2_result.sum() * 100, 1)}%。"
-    })
-
-# ============================================================================
-# Q3: 总营业额
-# ============================================================================
-
-@app.route('/api/q3', methods=['GET'])
-def get_q3():
-    """Q3: 总营业额"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+    # 应用筛选
+    merged = apply_filters(order_items, orders, dishes, start, end, stall_id)
     
-    order_items = DATA['order_items']
-    orders = DATA['orders']
-    
-    order_items['amount'] = order_items['quantity'] * order_items['unit_price']
-    total_revenue = order_items['amount'].sum()
-    
-    # 按餐段统计营业额
-    merged = orders.merge(order_items, left_on='id', right_on='order_id')
-    revenue_by_meal = merged.groupby('meal_period')['amount'].sum()
-    
-    return jsonify({
-        'title': 'Q3: 总营业额',
-        'total_revenue': round(total_revenue, 2),
-        'avg_order_revenue': round(total_revenue / orders.shape[0], 2),
-        'avg_item_revenue': round(order_items['amount'].mean(), 2),
-        'median_revenue': round(order_items['amount'].median(), 2),
-        'max_revenue': round(order_items['amount'].max(), 2),
-        'min_revenue': round(order_items['amount'].min(), 2),
-        'revenue_by_meal': {
-            '早餐': round(revenue_by_meal.get('早餐', 0), 2),
-            '午餐': round(revenue_by_meal.get('午餐', 0), 2),
-            '晚餐': round(revenue_by_meal.get('晚餐', 0), 2),
-        },
-        'conclusion': f"这批数据的总营业额为¥{total_revenue:,.2f}，平均每个订单的金额约为¥{total_revenue / orders.shape[0]:.2f}。"
-    })
-
-# ============================================================================
-# Q4: 销量前5的菜
-# ============================================================================
-
-@app.route('/api/q4', methods=['GET'])
-def get_q4():
-    """Q4: 销量前5的菜"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
-    
-    order_items = DATA['order_items']
-    dishes = DATA['dishes']
-    
-    sales_by_dish = order_items.groupby('dish_id')['quantity'].sum().reset_index()
-    sales_by_dish.columns = ['dish_id', 'total_quantity']
-    q4_result = sales_by_dish.merge(dishes[['id', 'name', 'price']], 
-                                     left_on='dish_id', right_on='id')
-    q4_result = q4_result[['name', 'total_quantity', 'price']].sort_values('total_quantity', ascending=False).head(5)
-    q4_result['revenue'] = q4_result['total_quantity'] * q4_result['price']
-    
-    data_list = []
-    for idx, row in q4_result.iterrows():
-        data_list.append({
-            'rank': len(data_list) + 1,
-            'name': row['name'],
-            'quantity': int(row['total_quantity']),
-            'price': round(row['price'], 2),
-            'revenue': round(row['revenue'], 2)
+    if len(merged) == 0:
+        return ok({
+            "revenue": 0,
+            "order_count": 0,
+            "avg_order_value": 0
         })
     
-    return jsonify({
-        'title': 'Q4: 销量前5的菜品',
-        'data': data_list,
-        'top_dish': q4_result.iloc[0]['name'],
-        'top_quantity': int(q4_result.iloc[0]['total_quantity']),
-        'top_revenue': round(q4_result.iloc[0]['revenue'], 2),
-        'conclusion': f"销量冠军是{q4_result.iloc[0]['name']}，共销售{int(q4_result.iloc[0]['total_quantity'])}份，营业额为¥{q4_result.iloc[0]['revenue']:,.2f}。"
+    # 计算营业额：SUM(quantity * unit_price)
+    merged['line_revenue'] = merged['quantity'] * merged['unit_price']
+    revenue = merged['line_revenue'].sum()
+    
+    # 计算订单数：COUNT(DISTINCT order_id)
+    order_count = merged['order_id'].nunique()
+    
+    # 计算客单价
+    avg_order_value = revenue / order_count if order_count > 0 else 0
+    
+    return ok({
+        "revenue": round(float(revenue), 2),
+        "order_count": int(order_count),
+        "avg_order_value": round(float(avg_order_value), 2)
     })
 
-# ============================================================================
-# Q5: 各档口营业额排名
-# ============================================================================
+@app.get("/api/trend")
+def trend():
+    """
+    获取每日营业额趋势
+    
+    参数：
+    - start: 开始日期 (YYYY-MM-DD)
+    - end: 结束日期 (YYYY-MM-DD)
+    - stall_id: 档口ID
+    
+    返回：[{date, revenue, order_count}, ...]
+    """
+    start = request.args.get('start')
+    end = request.args.get('end')
+    stall_id = request.args.get('stall_id')
+    
+    orders, dishes, order_items, waste_records = load_data()
+    
+    if orders is None:
+        return err("数据加载失败")
+    
+    # 应用筛选
+    merged = apply_filters(order_items, orders, dishes, start, end, stall_id)
+    
+    if len(merged) == 0:
+        return ok([])
+    
+    # 按日期分组
+    merged['date'] = merged['ordered_at'].dt.date
+    merged['line_revenue'] = merged['quantity'] * merged['unit_price']
+    
+    daily = merged.groupby('date').agg({
+        'line_revenue': 'sum',
+        'order_id': 'nunique'
+    }).reset_index()
+    
+    daily.columns = ['date', 'revenue', 'order_count']
+    daily['date'] = daily['date'].astype(str)
+    daily = daily.sort_values('date')
+    
+    return ok(daily.to_dict(orient='records'))
 
-@app.route('/api/q5', methods=['GET'])
-def get_q5():
-    """Q5: 各档口营业额排名"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+@app.get("/api/ranking")
+def ranking():
+    """
+    获取菜品销量排行（前10）
     
-    order_items = DATA['order_items']
-    dishes = DATA['dishes']
-    stalls = DATA['stalls']
+    参数：
+    - start: 开始日期 (YYYY-MM-DD)
+    - end: 结束日期 (YYYY-MM-DD)
+    - stall_id: 档口ID
     
-    merged_for_stall = order_items.merge(dishes[['id', 'stall_id']], 
-                                          left_on='dish_id', right_on='id')
-    merged_for_stall['amount'] = merged_for_stall['quantity'] * merged_for_stall['unit_price']
-    stall_revenue = merged_for_stall.groupby('stall_id')['amount'].sum().reset_index()
-    stall_revenue.columns = ['id', 'revenue']
-    q5_result = stall_revenue.merge(stalls[['id', 'name', 'location']], on='id').sort_values('revenue', ascending=False)
-    q5_result = q5_result[['name', 'location', 'revenue']].reset_index(drop=True)
+    返回：[{dish_name, quantity}, ...]
+    """
+    start = request.args.get('start')
+    end = request.args.get('end')
+    stall_id = request.args.get('stall_id')
     
-    data_list = []
-    for idx, row in q5_result.iterrows():
-        data_list.append({
-            'rank': idx + 1,
-            'name': row['name'],
-            'location': row['location'],
-            'revenue': round(row['revenue'], 2)
-        })
+    orders, dishes, order_items, waste_records = load_data()
     
-    return jsonify({
-        'title': 'Q5: 各档口营业额排名',
-        'data': data_list,
-        'top_stall': q5_result.iloc[0]['name'],
-        'top_revenue': round(q5_result.iloc[0]['revenue'], 2),
-        'avg_revenue': round(q5_result['revenue'].mean(), 2),
-        'conclusion': f"{q5_result.iloc[0]['name']}营业额最高，为¥{q5_result.iloc[0]['revenue']:,.2f}。"
-    })
+    if orders is None:
+        return err("数据加载失败")
+    
+    # 应用筛选
+    merged = apply_filters(order_items, orders, dishes, start, end, stall_id)
+    
+    if len(merged) == 0:
+        return ok([])
+    
+    # 按菜品分组，求和销量
+    ranking_data = merged.groupby('name_dish')['quantity'].sum().reset_index()
+    ranking_data.columns = ['dish_name', 'quantity']
+    ranking_data = ranking_data.sort_values('quantity', ascending=False).head(10)
+    
+    return ok(ranking_data.to_dict(orient='records'))
 
-# ============================================================================
-# Q6: 深度分析
-# ============================================================================
+@app.get("/api/waste")
+def waste_list():
+    """
+    获取浪费记录列表
+    
+    返回：[{id, dish_name, recorded_date, waste_weight_g, reason}, ...]
+    """
+    orders, dishes, order_items, waste_records = load_data()
+    
+    if waste_records is None:
+        return err("数据加载失败")
+    
+    # 合并菜品名称
+    merged = waste_records.merge(dishes[['id', 'name']], left_on='dish_id', right_on='id', how='left')
+    
+    result = merged[['id_x', 'name', 'recorded_date', 'waste_weight_g', 'reason']].copy()
+    result.columns = ['id', 'dish_name', 'recorded_date', 'waste_weight_g', 'reason']
+    result['recorded_date'] = result['recorded_date'].astype(str)
+    
+    return ok(result.to_dict(orient='records'))
 
-@app.route('/api/q6', methods=['GET'])
-def get_q6():
-    """Q6: 深度分析"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+@app.post("/api/waste")
+def add_waste():
+    """新增浪费记录"""
+    try:
+        data = request.get_json()
+        
+        # 验证必需字段
+        required = ['dish_id', 'recorded_date', 'waste_weight_g', 'reason']
+        if not all(k in data for k in required):
+            return err("缺少必需字段")
+        
+        orders, dishes, order_items, waste_records = load_data()
+        
+        # 新记录ID = 最大ID + 1
+        new_id = waste_records['id'].max() + 1
+        
+        new_record = {
+            'id': new_id,
+            'dish_id': int(data['dish_id']),
+            'recorded_date': data['recorded_date'],
+            'waste_weight_g': int(data['waste_weight_g']),
+            'reason': data['reason']
+        }
+        
+        # 追加到CSV
+        waste_records = pd.concat([
+            waste_records,
+            pd.DataFrame([new_record])
+        ], ignore_index=True)
+        
+        waste_records.to_csv('data/waste_records.csv', index=False)
+        
+        return ok(new_record)
     
-    order_items = DATA['order_items']
-    dishes = DATA['dishes']
-    orders = DATA['orders']
-    waste = DATA['waste']
-    
-    # 分析1: 销量vs浪费
-    order_items['amount'] = order_items['quantity'] * order_items['unit_price']
-    sales = order_items.groupby('dish_id')['quantity'].sum()
-    waste_by_dish = waste.groupby('dish_id')['waste_weight_g'].sum()
-    revenue_by_dish = order_items.groupby('dish_id')['amount'].sum()
-    
-    analysis = pd.DataFrame({
-        'sales': sales,
-        'waste': waste_by_dish,
-        'revenue': revenue_by_dish
-    }).fillna(0).reset_index()
-    
-    analysis = analysis.merge(dishes[['id', 'name']], left_on='dish_id', right_on='id')
-    analysis['waste_ratio'] = analysis['waste'] / (analysis['sales'] + 0.1)
-    
-    # 分析2: 餐段偏好
-    order_with_meal = orders.merge(order_items, left_on='id', right_on='order_id')
-    order_with_meal = order_with_meal.merge(dishes[['id', 'name']], 
-                                             left_on='dish_id', right_on='id')
-    
-    meal_stats = order_with_meal.groupby('meal_period')['amount'].agg(['sum', 'count', 'mean'])
-    
-    # 分析3: 浪费原因统计
-    waste_stats = waste['reason'].value_counts()
-    
-    return jsonify({
-        'title': 'Q6: 深度分析与有趣发现',
-        'analysis1': {
-            'title': '销量 vs 浪费分析',
-            'max_waste_dish': analysis.loc[analysis['waste'].idxmax(), 'name'],
-            'max_waste': round(analysis['waste'].max(), 0),
-            'max_sales_dish': analysis.loc[analysis['sales'].idxmax(), 'name'],
-            'max_sales': int(analysis['sales'].max()),
-            'avg_waste_per_unit': round(analysis['waste'].sum() / analysis['sales'].sum(), 2)
-        },
-        'analysis2': {
-            'title': '餐段营业额对比',
-            '早餐': {
-                'revenue': round(meal_stats.loc['早餐', 'sum'] if '早餐' in meal_stats.index else 0, 2),
-                'count': int(meal_stats.loc['早餐', 'count'] if '早餐' in meal_stats.index else 0),
-                'avg': round(meal_stats.loc['早餐', 'mean'] if '早餐' in meal_stats.index else 0, 2)
-            },
-            '午餐': {
-                'revenue': round(meal_stats.loc['午餐', 'sum'] if '午餐' in meal_stats.index else 0, 2),
-                'count': int(meal_stats.loc['午餐', 'count'] if '午餐' in meal_stats.index else 0),
-                'avg': round(meal_stats.loc['午餐', 'mean'] if '午餐' in meal_stats.index else 0, 2)
-            },
-            '晚餐': {
-                'revenue': round(meal_stats.loc['晚餐', 'sum'] if '晚餐' in meal_stats.index else 0, 2),
-                'count': int(meal_stats.loc['晚餐', 'count'] if '晚餐' in meal_stats.index else 0),
-                'avg': round(meal_stats.loc['晚餐', 'mean'] if '晚餐' in meal_stats.index else 0, 2)
-            }
-        },
-        'analysis3': {
-            'title': '浪费原因分布',
-            'reasons': waste_stats.to_dict()
-        },
-        'conclusion': '深度分析发现了多个有趣的规律，详见各分析板块。'
-    })
+    except Exception as e:
+        return err(f"新增失败: {str(e)}")
 
-# ============================================================================
-# 首页和静态页面
-# ============================================================================
-
-@app.route('/')
-def index():
-    """首页"""
-    return render_template('index.html')
-
-@app.route('/dashboard')
-def dashboard():
-    """仪表板"""
-    return render_template('dashboard.html')
-
-@app.route('/report')
-def report():
-    """报告"""
-    return render_template('report.html')
-
-# ============================================================================
-# 数据概览API
-# ============================================================================
-
-@app.route('/api/overview', methods=['GET'])
-def get_overview():
-    """获取数据概览"""
-    if DATA is None:
-        return jsonify({'error': '数据加载失败'}), 500
+@app.put("/api/waste/<int:waste_id>")
+def update_waste(waste_id):
+    """修改浪费记录"""
+    try:
+        data = request.get_json()
+        orders, dishes, order_items, waste_records = load_data()
+        
+        if waste_id not in waste_records['id'].values:
+            return err("记录不存在")
+        
+        # 更新字段
+        mask = waste_records['id'] == waste_id
+        for key in data:
+            if key in waste_records.columns:
+                waste_records.loc[mask, key] = data[key]
+        
+        waste_records.to_csv('data/waste_records.csv', index=False)
+        
+        record = waste_records[mask].iloc[0].to_dict()
+        return ok(record)
     
-    orders = DATA['orders']
-    dishes = DATA['dishes']
-    stalls = DATA['stalls']
-    order_items = DATA['order_items']
-    waste = DATA['waste']
-    
-    order_items['amount'] = order_items['quantity'] * order_items['unit_price']
-    
-    return jsonify({
-        'orders_count': int(orders.shape[0]),
-        'dishes_count': int(dishes.shape[0]),
-        'stalls_count': int(stalls.shape[0]),
-        'items_count': int(order_items.shape[0]),
-        'waste_count': int(waste.shape[0]),
-        'total_revenue': round(order_items['amount'].sum(), 2),
-        'total_waste': round(waste['waste_weight_g'].sum(), 0),
-        'avg_order_value': round(order_items['amount'].sum() / orders.shape[0], 2),
-    })
+    except Exception as e:
+        return err(f"修改失败: {str(e)}")
 
-# ============================================================================
-# 错误处理
-# ============================================================================
+@app.delete("/api/waste/<int:waste_id>")
+def delete_waste(waste_id):
+    """删除浪费记录"""
+    try:
+        orders, dishes, order_items, waste_records = load_data()
+        
+        if waste_id not in waste_records['id'].values:
+            return err("记录不存在")
+        
+        waste_records = waste_records[waste_records['id'] != waste_id]
+        waste_records.to_csv('data/waste_records.csv', index=False)
+        
+        return ok({"id": waste_id})
+    
+    except Exception as e:
+        return err(f"删除失败: {str(e)}")
 
+# ==================== 错误处理 ====================
 @app.errorhandler(404)
-def not_found(error):
-    """404错误处理"""
-    return jsonify({'error': '页面未找到'}), 404
+def not_found(e):
+    return err("接口不存在"), 404
 
 @app.errorhandler(500)
-def server_error(error):
-    """500错误处理"""
-    return jsonify({'error': '服务器错误'}), 500
+def server_error(e):
+    return err("服务器错误"), 500
 
-# ============================================================================
-# 主程序
-# ============================================================================
-
-if __name__ == '__main__':
-    # 创建必要的目录
-    os.makedirs('static/css', exist_ok=True)
-    os.makedirs('static/js', exist_ok=True)
-    os.makedirs('static/images', exist_ok=True)
-    os.makedirs('templates', exist_ok=True)
-    
-    # 启动Flask应用
-    app.run(debug=True, host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(port=5000, debug=True)

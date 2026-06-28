@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>校园食堂数据看板</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .filters {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .filter-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .filter-group label {
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .filter-group input,
+        .filter-group select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        button {
+            padding: 8px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .card.avg .value {
+            color: #764ba2;
+        }
+        
+        .card.count .value {
+            color: #f093fb;
+        }
+        
+        .charts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .chart-container h3 {
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .chart {
+            width: 100%;
+            height: 400px;
+        }
+        
+        .waste-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .waste-container h3 {
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .waste-form {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+        
+        .waste-form input,
+        .waste-form select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .waste-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        .waste-table thead {
+            background: #f5f5f5;
+        }
+        
+        .waste-table th,
+        .waste-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .waste-table th {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .waste-table tbody tr:hover {
+            background: #f9f9f9;
+        }
+        
+        .waste-table .actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .waste-table .btn-small {
+            padding: 4px 12px;
+            font-size: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .waste-table .btn-small:hover {
+            background: #764ba2;
+        }
+        
+        .waste-table .btn-delete {
+            background: #f56565;
+        }
+        
+        .waste-table .btn-delete:hover {
+            background: #e53e3e;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #999;
+        }
+        
+        .error {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        .success {
+            background: #c6f6d5;
+            color: #22543d;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        @media (max-width: 768px) {
+            .charts {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .filters {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .filter-group {
+                flex-direction: column;
+            }
+            
+            .filter-group input,
+            .filter-group select,
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🍽️ 校园食堂数据看板</h1>
+            <p>实时销售数据分析与浪费管理</p>
+        </div>
+        
+        <!-- 筛选区 -->
+        <div class="filters">
+            <div class="filter-group">
+                <label>开始日期：</label>
+                <input type="date" id="startDate" placeholder="YYYY-MM-DD">
+            </div>
+            <div class="filter-group">
+                <label>结束日期：</label>
+                <input type="date" id="endDate" placeholder="YYYY-MM-DD">
+            </div>
+            <div class="filter-group">
+                <label>档口：</label>
+                <select id="stallId">
+                    <option value="">全部</option>
+                    <option value="1">稻香中餐</option>
+                    <option value="2">北方面点</option>
+                    <option value="3">岭南风味</option>
+                    <option value="4">轻食工坊</option>
+                    <option value="5">民族风味</option>
+                    <option value="6">Chef's Kitchen</option>
+                </select>
+            </div>
+            <button onclick="loadAllData()">查询</button>
+            <button onclick="clearFilters()" style="background: #a0aec0;">清空</button>
+        </div>
+        
+        <!-- 提示信息 -->
+        <div id="message"></div>
+        
+        <!-- 三个指标卡 -->
+        <div class="cards">
+            <div class="card">
+                <h3>营业额</h3>
+                <div class="value" id="revenue">¥0.00</div>
+            </div>
+            <div class="card count">
+                <h3>订单数</h3>
+                <div class="value" id="orderCount">0</div>
+            </div>
+            <div class="card avg">
+                <h3>客单价</h3>
+                <div class="value" id="avgOrderValue">¥0.00</div>
+            </div>
+        </div>
+        
+        <!-- 图表区 -->
+        <div class="charts">
+            <div class="chart-container">
+                <h3>📈 每日营业额趋势</h3>
+                <div class="chart" id="trendChart"></div>
+            </div>
+            <div class="chart-container">
+                <h3>🏆 菜品销量排行</h3>
+                <div class="chart" id="rankingChart"></div>
+            </div>
+        </div>
+        
+        <!-- 浪费记录管理 -->
+        <div class="waste-container">
+            <h3>♻️ 浪费记录管理</h3>
+            
+            <!-- 新增表单 -->
+            <div class="waste-form">
+                <select id="newWasteDishId" placeholder="菜品ID">
+                    <option value="">选择菜品</option>
+                    <option value="1">红烧肉饭</option>
+                    <option value="2">番茄炒蛋</option>
+                    <option value="3">宫保鸡丁</option>
+                    <option value="6">牛肉面</option>
+                    <option value="11">烧鸭饭</option>
+                    <option value="16">鸡胸沙拉</option>
+                </select>
+                <input type="date" id="newWasteDate" placeholder="日期">
+                <input type="number" id="newWasteWeight" placeholder="重量(g)" min="1">
+                <select id="newWasteReason">
+                    <option value="">选择原因</option>
+                    <option value="备餐过量">备餐过量</option>
+                    <option value="制作失败">制作失败</option>
+                    <option value="售后退回">售后退回</option>
+                    <option value="临期报废">临期报废</option>
+                    <option value="其他">其他</option>
+                </select>
+                <button onclick="addWaste()">新增记录</button>
+            </div>
+            
+            <!-- 浪费记录表 -->
+            <div style="overflow-x: auto;">
+                <table class="waste-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>菜品名称</th>
+                            <th>记录日期</th>
+                            <th>浪费重量(g)</th>
+                            <th>浪费原因</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="wasteTableBody">
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #999;">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <script src="main.js"></script>
+</body>
+</html>
